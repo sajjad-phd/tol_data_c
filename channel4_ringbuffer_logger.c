@@ -531,51 +531,41 @@ static void* producer_thread(void *arg)
         double requested_rate = g_scan_rate;
         pthread_mutex_unlock(&g_state_mutex);
         
-        // Start scan if enabled and not already started, or if rate changed
-        if (should_capture && (!scan_active || requested_rate != current_rate))
+        // Check if capture is enabled
+        if (should_capture)
         {
-            if (scan_active)
+            if (!scan_active)
             {
-                // Stop current scan if rate changed
-                mcc118_a_in_scan_stop(g_hat_addr);
-                mcc118_a_in_scan_cleanup(g_hat_addr);
-                scan_active = false;
-            }
-            
-            // Calculate actual scan rate
-            mcc118_a_in_scan_actual_rate(num_channels, requested_rate, &actual_scan_rate);
-            
-            // Start continuous scan
-            result = mcc118_a_in_scan_start(g_hat_addr, channel_mask, 0, 
-                                             requested_rate, OPTS_CONTINUOUS);
-            if (result != RESULT_SUCCESS)
-            {
-                fprintf(stderr, "Error starting scan: %d\n", result);
+                // Get current rate
                 pthread_mutex_lock(&g_state_mutex);
-                g_capture_enabled = false;
+                double current_rate = g_scan_rate;
                 pthread_mutex_unlock(&g_state_mutex);
+                
+                // Calculate actual scan rate
+                mcc118_a_in_scan_actual_rate(num_channels, current_rate, &actual_scan_rate);
+                
+                // Start continuous scan
+                result = mcc118_a_in_scan_start(g_hat_addr, channel_mask, 0, 
+                                                 current_rate, OPTS_CONTINUOUS);
+                if (result == RESULT_SUCCESS)
+                {
+                    scan_active = true;
+                    printf("Producer: Scan started at %.2f Hz (requested: %.2f Hz)\n", 
+                           actual_scan_rate, current_rate);
+                }
+                else
+                {
+                    fprintf(stderr, "Error starting scan: %d\n", result);
+                    print_error(result);
+                    pthread_mutex_lock(&g_state_mutex);
+                    g_capture_enabled = false;
+                    pthread_mutex_unlock(&g_state_mutex);
+                    usleep(100000);  // 100 ms before retry
+                    continue;
+                }
             }
-            else
-            {
-                scan_active = true;
-                current_rate = requested_rate;
-                printf("Producer: Scan started at %.2f Hz (requested: %.2f Hz)\n", 
-                       actual_scan_rate, requested_rate);
-            }
-        }
-        
-        // Stop scan if disabled
-        if (!should_capture && scan_active)
-        {
-            mcc118_a_in_scan_stop(g_hat_addr);
-            mcc118_a_in_scan_cleanup(g_hat_addr);
-            scan_active = false;
-            printf("Producer: Scan stopped\n");
-        }
-        
-        // Read from device only if scan is active
-        if (scan_active)
-        {
+            
+            // Read from device
             result = mcc118_a_in_scan_read(g_hat_addr, &read_status, 
                                            READ_ALL_AVAILABLE, timeout,
                                            read_buf, read_buffer_size, &samples_read);
@@ -585,37 +575,43 @@ static void* producer_thread(void *arg)
                 if (result != RESULT_TIMEOUT)
                 {
                     fprintf(stderr, "Error reading from device: %d\n", result);
-                    pthread_mutex_lock(&g_state_mutex);
-                    g_capture_enabled = false;
-                    pthread_mutex_unlock(&g_state_mutex);
-                    scan_active = false;
+                    break;
                 }
+                continue;
             }
-            else
+            
+            if (read_status & (STATUS_HW_OVERRUN | STATUS_BUFFER_OVERRUN))
             {
-                if (read_status & (STATUS_HW_OVERRUN | STATUS_BUFFER_OVERRUN))
+                fprintf(stderr, "Warning: Overrun detected\n");
+            }
+            
+            // Write to ring buffer
+            if (samples_read > 0)
+            {
+                size_t bytes_written = ring_buffer_write(&g_ring_buffer, read_buf, 
+                                                         samples_read * sizeof(double));
+                if (bytes_written < samples_read * sizeof(double))
                 {
-                    fprintf(stderr, "Warning: Overrun detected\n");
-                }
-                
-                // Write to ring buffer
-                if (samples_read > 0)
-                {
-                    size_t bytes_written = ring_buffer_write(&g_ring_buffer, read_buf, 
-                                                             samples_read * sizeof(double));
-                    if (bytes_written < samples_read * sizeof(double))
-                    {
-                        fprintf(stderr, "Warning: Ring buffer overflow, dropped %zu bytes\n",
-                                samples_read * sizeof(double) - bytes_written);
-                    }
+                    fprintf(stderr, "Warning: Ring buffer overflow, dropped %zu bytes\n",
+                            samples_read * sizeof(double) - bytes_written);
                 }
             }
         }
         else
         {
-            // Small sleep when not capturing
-            usleep(100000);  // 100 ms
+            // Capture disabled - stop scan if running
+            if (scan_active)
+            {
+                mcc118_a_in_scan_stop(g_hat_addr);
+                mcc118_a_in_scan_cleanup(g_hat_addr);
+                scan_active = false;
+                printf("Producer: Scan stopped\n");
+            }
+            usleep(100000);  // 100 ms sleep when not capturing
         }
+        
+        // Small sleep to prevent CPU spinning
+        usleep(1000);  // 1 ms
     }
     
     // Stop scan if still active
@@ -813,6 +809,10 @@ int main(void)
         destroy_ring_buffer(&g_ring_buffer);
         return -1;
     }
+    
+    // Cleanup any existing scan (in case of previous crash)
+    mcc118_a_in_scan_stop(g_hat_addr);
+    mcc118_a_in_scan_cleanup(g_hat_addr);
     
     // Create control thread (socket listener)
     if (pthread_create(&control_tid, NULL, control_thread, NULL) != 0)
