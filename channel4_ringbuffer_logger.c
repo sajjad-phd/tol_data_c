@@ -275,7 +275,11 @@ static void send_status(int client_fd)
              available_samples,
              (unsigned long long)g_seq_counter);
     
-    send(client_fd, status_msg, strlen(status_msg), 0);
+    ssize_t sent = send(client_fd, status_msg, strlen(status_msg), 0);
+    if (sent < 0)
+    {
+        perror("send (status)");
+    }
 }
 
 // Handle command from socket
@@ -410,52 +414,41 @@ static void* control_thread(void *arg)
                 continue;
             }
             
-            // Read command (read until newline or buffer full)
+            // Read command - simple single recv call
             char command[MAX_COMMAND_LEN] = {0};
-            ssize_t total_read = 0;
-            ssize_t n;
+            ssize_t n = recv(client_fd, command, sizeof(command) - 1, 0);
             
-            // Read until we get a newline or buffer is full
-            while (total_read < (ssize_t)(sizeof(command) - 1))
+            if (n > 0)
             {
-                n = recv(client_fd, command + total_read, 
-                        sizeof(command) - 1 - total_read, 0);
-                
-                if (n <= 0)
+                command[n] = '\0';
+                // Remove trailing newline/carriage return if present
+                size_t cmd_len = strlen(command);
+                while (cmd_len > 0 && (command[cmd_len-1] == '\n' || command[cmd_len-1] == '\r'))
                 {
-                    if (n == 0)
-                    {
-                        // Client closed connection
-                        break;
-                    }
-                    else if (errno == EINTR)
-                    {
-                        continue;
-                    }
-                    else
-                    {
-                        perror("recv");
-                        break;
-                    }
+                    command[cmd_len-1] = '\0';
+                    cmd_len--;
                 }
                 
-                total_read += n;
-                command[total_read] = '\0';
-                
-                // Check if we got a complete command (ends with newline)
-                if (strchr(command, '\n') != NULL)
+                // Process command (with error handling)
+                if (cmd_len > 0)
                 {
-                    break;
+                    handle_command(command, client_fd);
+                }
+            }
+            else if (n == 0)
+            {
+                // Client closed connection before sending data
+            }
+            else
+            {
+                // Error reading
+                if (errno != EINTR)
+                {
+                    perror("recv");
                 }
             }
             
-            if (total_read > 0)
-            {
-                command[total_read] = '\0';
-                handle_command(command, client_fd);
-            }
-            
-            // Close connection (this signals end of response to client)
+            // Always close connection after handling (or attempting to handle)
             close(client_fd);
         }
     }
