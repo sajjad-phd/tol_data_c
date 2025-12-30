@@ -1,0 +1,22 @@
+# Compiled binaries
+*.o
+*.so
+*.a
+channel4_ringbuffer_logger
+
+# Build artifacts
+*~
+core
+*.part
+
+# Output files (optional - uncomment if you don't want to track data files)
+# DAD_Files/*.bin
+# DAD_Files/*.bin.part
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
