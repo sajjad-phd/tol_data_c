@@ -7,7 +7,7 @@ Commands: START, STOP, STATUS, SET_RATE <value>
 import socket
 import sys
 
-SOCKET_PATH = "/run/sensor_ctrl.sock"
+SOCKET_PATH = "/tmp/sensor_ctrl.sock"
 
 def send_command(command):
     """Send a command to the sensor controller and print the response."""

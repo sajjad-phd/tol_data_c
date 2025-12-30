@@ -18,6 +18,7 @@
 
 *****************************************************************************/
 #define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,7 +44,7 @@
 #define RECORD_SIZE 8  // sizeof(double) = 8 bytes per sample
 #define RING_BUFFER_SIZE (4 * 1024 * 1024)  // 4 MB ring buffer
 #define OUTPUT_DIR_RELATIVE "DAD_Files"
-#define SOCKET_PATH "/run/sensor_ctrl.sock"
+#define SOCKET_PATH "/tmp/sensor_ctrl.sock"
 #define MAX_COMMAND_LEN 256
 
 // Global variable for output directory path

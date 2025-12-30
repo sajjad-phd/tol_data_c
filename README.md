@@ -12,7 +12,7 @@ This program acquires data from **Channel 4** of the MCC 118 HAT board using a *
 - **Ring buffer**: 4 MB circular buffer to decouple reading from writing
 - **File format**: Binary format with header (as per specification)
 - **Atomic writes**: Files written as `.bin.part` then renamed to `.bin` when complete
-- **Unix socket control**: Control via `/run/sensor_ctrl.sock`
+- **Unix socket control**: Control via `/tmp/sensor_ctrl.sock`
 
 ## Architecture
 
@@ -64,7 +64,7 @@ make
 ```
 
 The program will:
-1. Create Unix socket at `/run/sensor_ctrl.sock`
+1. Create Unix socket at `/tmp/sensor_ctrl.sock`
 2. Wait for commands via socket
 3. Start/stop acquisition based on commands
 
@@ -87,7 +87,7 @@ python3 send_command.py STOP
 ```python
 import socket
 
-SOCKET_PATH = "/run/sensor_ctrl.sock"
+SOCKET_PATH = "/tmp/sensor_ctrl.sock"
 
 def send_command(command):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -152,6 +152,6 @@ tol_data_c/
 
 ## Socket Permissions
 
-The socket is created at `/run/sensor_ctrl.sock` with permissions 0666 (readable/writable by all).
-If you need to run as a regular user, you may need to create `/run` directory or use a different path.
+The socket is created at `/tmp/sensor_ctrl.sock` with permissions 0666 (readable/writable by all).
+The `/tmp` directory is accessible by all users, so no special permissions are needed.
 
