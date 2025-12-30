@@ -410,30 +410,52 @@ static void* control_thread(void *arg)
                 continue;
             }
             
-            // Read command
+            // Read command (read until newline or buffer full)
             char command[MAX_COMMAND_LEN] = {0};
-            ssize_t n = recv(client_fd, command, sizeof(command) - 1, 0);
+            ssize_t total_read = 0;
+            ssize_t n;
             
-            if (n > 0)
+            // Read until we get a newline or buffer is full
+            while (total_read < (ssize_t)(sizeof(command) - 1))
             {
-                command[n] = '\0';
-                handle_command(command, client_fd);
+                n = recv(client_fd, command + total_read, 
+                        sizeof(command) - 1 - total_read, 0);
                 
-                // Shutdown write side to signal end of response
-                shutdown(client_fd, SHUT_WR);
-            }
-            else if (n == 0)
-            {
-                // Client closed connection
-            }
-            else
-            {
-                if (errno != EINTR)
+                if (n <= 0)
                 {
-                    perror("recv");
+                    if (n == 0)
+                    {
+                        // Client closed connection
+                        break;
+                    }
+                    else if (errno == EINTR)
+                    {
+                        continue;
+                    }
+                    else
+                    {
+                        perror("recv");
+                        break;
+                    }
+                }
+                
+                total_read += n;
+                command[total_read] = '\0';
+                
+                // Check if we got a complete command (ends with newline)
+                if (strchr(command, '\n') != NULL)
+                {
+                    break;
                 }
             }
             
+            if (total_read > 0)
+            {
+                command[total_read] = '\0';
+                handle_command(command, client_fd);
+            }
+            
+            // Close connection (this signals end of response to client)
             close(client_fd);
         }
     }

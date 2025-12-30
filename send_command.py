@@ -14,10 +14,8 @@ def send_command(command):
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(SOCKET_PATH)
-            client.sendall(command.encode())
-            
-            # Shutdown write side to signal we're done sending
-            client.shutdown(socket.SHUT_WR)
+            # Send command with newline
+            client.sendall((command + "\n").encode())
             
             # Receive response (read until connection closes)
             response = b""
