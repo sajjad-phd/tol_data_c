@@ -418,6 +418,9 @@ static void* control_thread(void *arg)
             {
                 command[n] = '\0';
                 handle_command(command, client_fd);
+                
+                // Shutdown write side to signal end of response
+                shutdown(client_fd, SHUT_WR);
             }
             else if (n == 0)
             {

@@ -16,11 +16,20 @@ def send_command(command):
             client.connect(SOCKET_PATH)
             client.sendall(command.encode())
             
-            # Receive response
-            response = client.recv(1024).decode()
+            # Shutdown write side to signal we're done sending
+            client.shutdown(socket.SHUT_WR)
+            
+            # Receive response (read until connection closes)
+            response = b""
+            while True:
+                chunk = client.recv(1024)
+                if not chunk:
+                    break
+                response += chunk
+            
             print(f"Sent: {command}")
-            print(f"Response: {response.strip()}")
-            return response
+            print(f"Response: {response.decode().strip()}")
+            return response.decode()
     except FileNotFoundError:
         print(f"Error: Socket not found at {SOCKET_PATH}")
         print("Make sure the sensor controller is running.")
