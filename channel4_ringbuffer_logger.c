@@ -297,18 +297,20 @@ static void handle_command(const char *command, int client_fd)
     if (token == NULL)
         return;
     
-    pthread_mutex_lock(&g_state_mutex);
-    
     if (strcmp(token, "START") == 0)
     {
+        pthread_mutex_lock(&g_state_mutex);
         g_capture_enabled = true;
+        pthread_mutex_unlock(&g_state_mutex);
         const char *response = "OK: Acquisition started\n";
         send(client_fd, response, strlen(response), 0);
         printf("Command received: START\n");
     }
     else if (strcmp(token, "STOP") == 0)
     {
+        pthread_mutex_lock(&g_state_mutex);
         g_capture_enabled = false;
+        pthread_mutex_unlock(&g_state_mutex);
         const char *response = "OK: Acquisition stopped\n";
         send(client_fd, response, strlen(response), 0);
         printf("Command received: STOP\n");
@@ -326,7 +328,9 @@ static void handle_command(const char *command, int client_fd)
             double new_rate = atof(token);
             if (new_rate > 0 && new_rate <= 100000.0)
             {
+                pthread_mutex_lock(&g_state_mutex);
                 g_scan_rate = new_rate;
+                pthread_mutex_unlock(&g_state_mutex);
                 char response[128];
                 snprintf(response, sizeof(response), "OK: Rate set to %.2f Hz\n", new_rate);
                 send(client_fd, response, strlen(response), 0);
@@ -350,8 +354,6 @@ static void handle_command(const char *command, int client_fd)
         snprintf(response, sizeof(response), "ERROR: Unknown command: %s\n", token);
         send(client_fd, response, strlen(response), 0);
     }
-    
-    pthread_mutex_unlock(&g_state_mutex);
 }
 
 // Control thread: Listen for socket commands
