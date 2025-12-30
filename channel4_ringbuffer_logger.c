@@ -269,98 +269,86 @@ static void send_status(int client_fd)
     pthread_mutex_unlock(&g_state_mutex);
     
     snprintf(status_msg, sizeof(status_msg),
-             "STATUS: capture=%s, rate=%.2f Hz, buffer_samples=%u, seq_counter=%llu\n",
+             "STATUS: capture=%s, rate=%.2f Hz, buffer_samples=%u, seq_counter=%llu",
              capturing ? "ON" : "OFF",
              rate,
              available_samples,
              (unsigned long long)g_seq_counter);
     
-    ssize_t sent = send(client_fd, status_msg, strlen(status_msg), 0);
-    if (sent < 0)
-    {
-        perror("send (status)");
-    }
+    strncat(status_msg, "\n", sizeof(status_msg) - strlen(status_msg) - 1);
+    send(client_fd, status_msg, strlen(status_msg), 0);
 }
 
 // Handle command from socket
 static void handle_command(const char *command, int client_fd)
 {
     char cmd_copy[MAX_COMMAND_LEN];
-    char *cmd = cmd_copy;
-    char *arg = NULL;
+    char *token;
     
     strncpy(cmd_copy, command, sizeof(cmd_copy) - 1);
     cmd_copy[sizeof(cmd_copy) - 1] = '\0';
     
-    // Remove trailing newline/whitespace
-    size_t len = strlen(cmd);
-    while (len > 0 && (cmd[len-1] == '\n' || cmd[len-1] == '\r' || cmd[len-1] == ' '))
-    {
-        cmd[--len] = '\0';
-    }
+    // Remove trailing newline
+    size_t len = strlen(cmd_copy);
+    if (len > 0 && cmd_copy[len - 1] == '\n')
+        cmd_copy[len - 1] = '\0';
     
-    // Find argument (if any)
-    arg = strchr(cmd, ' ');
-    if (arg)
-    {
-        *arg++ = '\0';
-        // Skip leading spaces in argument
-        while (*arg == ' ') arg++;
-    }
-    
-    // Convert command to uppercase
-    for (char *p = cmd; *p; p++)
-    {
-        if (*p >= 'a' && *p <= 'z')
-            *p = *p - 'a' + 'A';
-    }
+    token = strtok(cmd_copy, " \t");
+    if (token == NULL)
+        return;
     
     pthread_mutex_lock(&g_state_mutex);
     
-    if (strcmp(cmd, "START") == 0)
+    if (strcmp(token, "START") == 0)
     {
         g_capture_enabled = true;
-        printf("Command: START - Capture enabled\n");
-        send(client_fd, "OK: START\n", 9, 0);
+        const char *response = "OK: Acquisition started\n";
+        send(client_fd, response, strlen(response), 0);
+        printf("Command received: START\n");
     }
-    else if (strcmp(cmd, "STOP") == 0)
+    else if (strcmp(token, "STOP") == 0)
     {
         g_capture_enabled = false;
-        printf("Command: STOP - Capture disabled\n");
-        send(client_fd, "OK: STOP\n", 9, 0);
+        const char *response = "OK: Acquisition stopped\n";
+        send(client_fd, response, strlen(response), 0);
+        printf("Command received: STOP\n");
     }
-    else if (strcmp(cmd, "STATUS") == 0)
+    else if (strcmp(token, "STATUS") == 0)
     {
         send_status(client_fd);
+        printf("Command received: STATUS\n");
     }
-    else if (strcmp(cmd, "SET_RATE") == 0)
+    else if (strcmp(token, "SET_RATE") == 0)
     {
-        if (arg && *arg != '\0')
+        token = strtok(NULL, " \t");
+        if (token != NULL)
         {
-            double new_rate = atof(arg);
-            if (new_rate > 0 && new_rate <= 100000)  // Reasonable limits
+            double new_rate = atof(token);
+            if (new_rate > 0 && new_rate <= 100000.0)
             {
                 g_scan_rate = new_rate;
-                printf("Command: SET_RATE %.2f Hz\n", new_rate);
-                char response[64];
-                snprintf(response, sizeof(response), "OK: SET_RATE %.2f\n", new_rate);
+                char response[128];
+                snprintf(response, sizeof(response), "OK: Rate set to %.2f Hz\n", new_rate);
                 send(client_fd, response, strlen(response), 0);
+                printf("Command received: SET_RATE %.2f\n", new_rate);
             }
             else
             {
-                send(client_fd, "ERROR: Invalid rate (must be > 0 and <= 100000)\n", 50, 0);
+                const char *response = "ERROR: Invalid rate (must be > 0 and <= 100000)\n";
+                send(client_fd, response, strlen(response), 0);
             }
         }
         else
         {
-            send(client_fd, "ERROR: SET_RATE requires a value\n", 35, 0);
+            const char *response = "ERROR: SET_RATE requires a value\n";
+            send(client_fd, response, strlen(response), 0);
         }
     }
     else
     {
-        char error_msg[128];
-        snprintf(error_msg, sizeof(error_msg), "ERROR: Unknown command: %s\n", cmd);
-        send(client_fd, error_msg, strlen(error_msg), 0);
+        char response[128];
+        snprintf(response, sizeof(response), "ERROR: Unknown command: %s\n", token);
+        send(client_fd, response, strlen(response), 0);
     }
     
     pthread_mutex_unlock(&g_state_mutex);
@@ -369,88 +357,36 @@ static void handle_command(const char *command, int client_fd)
 // Control thread: Listen for socket commands
 static void* control_thread(void *arg)
 {
+    struct sockaddr_un client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    char cmd_buffer[MAX_COMMAND_LEN];
+    ssize_t n;
+    
     printf("Control thread started. Listening on %s\n", SOCKET_PATH);
+    fflush(stdout);
     
     while (g_running)
     {
-        fd_set read_fds;
-        struct timeval timeout;
-        
-        FD_ZERO(&read_fds);
-        FD_SET(g_socket_fd, &read_fds);
-        
-        timeout.tv_sec = 1;
-        timeout.tv_usec = 0;
-        
-        int select_result = select(g_socket_fd + 1, &read_fds, NULL, NULL, &timeout);
-        
-        if (select_result < 0)
+        // Accept connection (blocking)
+        int client_fd = accept(g_socket_fd, (struct sockaddr *)&client_addr, &client_len);
+        if (client_fd < 0)
         {
             if (g_running && errno != EINTR)
             {
-                perror("select");
+                perror("accept");
             }
-            continue;
+            break;
         }
         
-        if (select_result == 0)
+        // Read command
+        n = recv(client_fd, cmd_buffer, sizeof(cmd_buffer) - 1, 0);
+        if (n > 0)
         {
-            // Timeout - check if we should continue
-            continue;
+            cmd_buffer[n] = '\0';
+            handle_command(cmd_buffer, client_fd);
         }
         
-        if (FD_ISSET(g_socket_fd, &read_fds))
-        {
-            struct sockaddr_un client_addr;
-            socklen_t client_len = sizeof(client_addr);
-            int client_fd = accept(g_socket_fd, (struct sockaddr *)&client_addr, &client_len);
-            
-            if (client_fd < 0)
-            {
-                if (g_running && errno != EINTR)
-                {
-                    perror("accept");
-                }
-                continue;
-            }
-            
-            // Read command - simple single recv call
-            char command[MAX_COMMAND_LEN] = {0};
-            ssize_t n = recv(client_fd, command, sizeof(command) - 1, 0);
-            
-            if (n > 0)
-            {
-                command[n] = '\0';
-                // Remove trailing newline/carriage return if present
-                size_t cmd_len = strlen(command);
-                while (cmd_len > 0 && (command[cmd_len-1] == '\n' || command[cmd_len-1] == '\r'))
-                {
-                    command[cmd_len-1] = '\0';
-                    cmd_len--;
-                }
-                
-                // Process command (with error handling)
-                if (cmd_len > 0)
-                {
-                    handle_command(command, client_fd);
-                }
-            }
-            else if (n == 0)
-            {
-                // Client closed connection before sending data
-            }
-            else
-            {
-                // Error reading
-                if (errno != EINTR)
-                {
-                    perror("recv");
-                }
-            }
-            
-            // Always close connection after handling (or attempting to handle)
-            close(client_fd);
-        }
+        close(client_fd);
     }
     
     printf("Control thread stopped.\n");
